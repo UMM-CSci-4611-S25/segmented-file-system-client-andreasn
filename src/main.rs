@@ -1,17 +1,18 @@
-// Below is a version of the `main` function and some error types. This assumes
-// the existence of types like `FileManager`, `Packet`, and `PacketParseError`.
-// You can use this code as a starting point for the exercise, or you can
-// delete it and write your own code with the same function signature.
-
-// packet structure
+// packet
 
 use std::ffi::OsString;
 use std::convert::TryFrom;
+use std::collections::HashMap;
+use std::fs::File;
+use std::path::Path;
+use std::io::{self, Write};
+use std::net::UdpSocket;
 
 pub struct Header {
     file_id: u8,
     file_name: OsString,
 }
+
 pub struct Data {
     file_id: u8,
     packet_number: u16,
@@ -41,7 +42,7 @@ impl TryFrom<&[u8]> for Packet {
         // If status byte is even (least significant bit is 0), it's a header packet
         if status_byte % 2 == 0 {
             // Extract file name from the rest of the bytes
-            let file_name = OsString::from(String::from_utf8_lossy(&bytes[2..]));
+            let file_name = OsString::from(String::from_utf8_lossy(&bytes[2..]).into_owned());
             Ok(Packet::Header(Header { file_id, file_name }))
         } else {
             // It's a data packet
@@ -69,12 +70,98 @@ impl TryFrom<&[u8]> for Packet {
     }
 }
 
+// file manager 
+pub struct PacketGroup {
+    file_name: Option<OsString>,
+    expected_number_of_packets: Option<usize>,
+    packets: HashMap<u16, Vec<u8>>,
+}
 
+#[derive(Default)]
+pub struct FileManager {
+    packet_groups: HashMap<u8, PacketGroup>,
+}
 
-use std::{
-    io::{self, Write},
-    net::UdpSocket,
-};
+impl PacketGroup {
+    fn new() -> Self {
+        PacketGroup {
+            file_name: None,
+            expected_number_of_packets: None,
+            packets: HashMap::new(),
+        }
+    }
+    
+    fn is_complete(&self) -> bool {
+        if self.file_name.is_none() {
+            return false;
+        }
+        
+        if let Some(expected) = self.expected_number_of_packets {
+            self.packets.len() >= expected
+        } else {
+            false
+        }
+    }
+    
+    fn write_to_file(&self) -> io::Result<()> {
+        if let Some(file_name) = &self.file_name {
+            let mut file = File::create(Path::new(file_name))?;
+            
+            // Sort packet numbers to ensure correct order
+            let mut packet_nums: Vec<_> = self.packets.keys().collect();
+            packet_nums.sort();
+            
+            for &packet_num in packet_nums {
+                if let Some(data) = self.packets.get(&packet_num) {
+                    file.write_all(data)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl FileManager {
+    fn received_all_packets(&self) -> bool {
+        if self.packet_groups.is_empty() {
+            return false;
+        }
+        
+        self.packet_groups.values().all(|pg| pg.is_complete())
+    }
+    
+    fn process_packet(&mut self, packet: Packet) {
+        match packet {
+            Packet::Header(header) => {
+                let group = self.packet_groups
+                    .entry(header.file_id)
+                    .or_insert_with(PacketGroup::new);
+                group.file_name = Some(header.file_name);
+            },
+            Packet::Data(data) => {
+                let group = self.packet_groups
+                    .entry(data.file_id)
+                    .or_insert_with(PacketGroup::new);
+                
+                group.packets.insert(data.packet_number, data.data);
+                
+                if data.is_last_packet {
+                    // If this is the last packet, we know the total number of packets
+                    group.expected_number_of_packets = Some((data.packet_number + 1) as usize);
+                }
+            }
+        }
+    }
+    
+    fn write_all_files(&self) -> io::Result<()> {
+        for group in self.packet_groups.values() {
+            group.write_to_file()?;
+        }
+        Ok(())
+    }
+}
+
+// client
 
 #[derive(Debug)]
 pub enum ClientError {
@@ -117,5 +204,3 @@ fn main() -> Result<(), ClientError> {
 
     Ok(())
 }
-
-
