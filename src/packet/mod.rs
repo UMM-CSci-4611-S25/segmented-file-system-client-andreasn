@@ -1,40 +1,43 @@
 pub mod data_packet;
 pub mod header_packet;
 
+use data_packet::DataPacket;
 use header_packet::HeaderPacket;
+use std::convert::TryFrom;
 
 #[derive(Debug, PartialEq)]
 pub enum Packet {
     HeaderPacket(HeaderPacket),
-    DataPacket(data_packet::DataPacket),
+    DataPacket(DataPacket),
 }
 
-impl Packet {
-    pub fn new_header(bytes: &[u8]) -> Result<Self, PacketParseError> {
-        Ok(Packet::HeaderPacket(HeaderPacket::try_from(bytes)?))
-    }
-
-    pub fn new_data(bytes: &[u8]) -> Result<Self, PacketParseError> {
-        Ok(Packet::DataPacket(data_packet::DataPacket::try_from(
-            bytes,
-        )?))
-    }
+#[derive(Debug, PartialEq)]
+pub enum PacketParseError {
+    InvalidPacketType,
+    InvalidPacketLength,
+    InvalidHeaderPacket,
+    InvalidDataPacket,
 }
 
 impl TryFrom<&[u8]> for Packet {
     type Error = PacketParseError;
 
-    fn try_from(bytes: &[u8]) -> Result<Self, PacketParseError> {
-        let status_byte: u8 = bytes[0];
-        Ok(if status_byte == 0 {
-            Packet::new_header(bytes)?
-            // Packet::HeaderPacket(HeaderPacket::try_from(bytes)?)
-            // let file_name = OsString::from_str(str::from_utf8(&bytes[2..bytes.len()]).unwrap()).unwrap(); // Uhhhhhh what is this line... there is probably a better way to do this?
-        } else {
-            Packet::new_data(bytes)?
-        })
+    fn try_from(buffer: &[u8]) -> Result<Self, Self::Error> {
+        if buffer.is_empty() {
+            return Err(PacketParseError::InvalidPacketLength);
+        }
+
+        let status_byte = buffer[0];
+        
+        // Even status byte (least significant bit is 0) means header packet
+        if status_byte & 1 == 0 {
+            let header_packet = HeaderPacket::try_from(buffer)?;
+            Ok(Packet::HeaderPacket(header_packet))
+        } 
+        // Odd status byte (least significant bit is 1) means data packet
+        else {
+            let data_packet = DataPacket::try_from(buffer)?;
+            Ok(Packet::DataPacket(data_packet))
+        }
     }
 }
-
-#[derive(Debug)]
-pub enum PacketParseError {}

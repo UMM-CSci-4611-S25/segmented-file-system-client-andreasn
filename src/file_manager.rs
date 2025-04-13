@@ -1,7 +1,6 @@
 use crate::packet::{data_packet::DataPacket, header_packet::HeaderPacket, Packet};
 use crate::PacketGroup;
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
